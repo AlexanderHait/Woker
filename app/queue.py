@@ -113,6 +113,7 @@ WITH ranked AS (
 ),
 picked AS (
     SELECT d.id,
+           d.request_id,
            r.claimable_at,
            d.status          AS prev_status,
            d.attempts        AS prev_attempts,
@@ -135,6 +136,9 @@ SET status           = 'in_flight',
     lease_expires_at = now() + $5::interval,
     locked_by        = $1
 FROM picked p
+-- The lead itself comes back with the claim rather than in a second query: a worker has
+-- no use for a claimed delivery without the payload it is supposed to send.
+JOIN requests req ON req.id = p.request_id
 WHERE d.id = p.id
 RETURNING d.id             AS delivery_id,
           d.request_id,
@@ -143,16 +147,14 @@ RETURNING d.id             AS delivery_id,
           d.recipient_origin,
           d.attempts       AS budget_attempt,
           d.total_attempts AS attempt_number,
+          req.source_id,
+          req.idempotency_key,
+          req.payload,
+          req.received_at,
           p.prev_status,
           p.prev_attempts,
           p.prev_total_attempts,
           p.prev_last_attempt_at
-"""
-
-_FETCH_REQUESTS = """
-    SELECT id, source_id, idempotency_key, payload, received_at
-    FROM requests
-    WHERE id = ANY($1::uuid[])
 """
 
 # A row reclaimed from a dead worker gets an honest journal entry: we know an attempt
@@ -212,30 +214,22 @@ async def claim_batch(
                 [worker_id] * len(reclaimed),
             )
 
-        requests = {
-            r["id"]: r
-            for r in await conn.fetch(_FETCH_REQUESTS, [row["request_id"] for row in rows])
-        }
-
-    claimed: list[ClaimedDelivery] = []
-    for row in rows:
-        request = requests[row["request_id"]]
-        claimed.append(
-            ClaimedDelivery(
-                delivery_id=row["delivery_id"],
-                request_id=row["request_id"],
-                recipient_name=row["recipient_name"],
-                recipient_url=row["recipient_url"],
-                recipient_origin=row["recipient_origin"],
-                budget_attempt=row["budget_attempt"],
-                attempt_number=row["attempt_number"],
-                source_id=request["source_id"],
-                idempotency_key=request["idempotency_key"],
-                received_at=request["received_at"],
-                payload=request["payload"],
-            )
+    return [
+        ClaimedDelivery(
+            delivery_id=row["delivery_id"],
+            request_id=row["request_id"],
+            recipient_name=row["recipient_name"],
+            recipient_url=row["recipient_url"],
+            recipient_origin=row["recipient_origin"],
+            budget_attempt=row["budget_attempt"],
+            attempt_number=row["attempt_number"],
+            source_id=row["source_id"],
+            idempotency_key=row["idempotency_key"],
+            received_at=row["received_at"],
+            payload=row["payload"],
         )
-    return claimed
+        for row in rows
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -374,20 +368,24 @@ def _truncate(text: str | None, limit: int) -> str | None:
 #
 # Rows a worker is actively sending (a live lease) are skipped rather than reset, so a
 # manual retry never races an attempt already on the wire.
+#
+# Only the WHERE clause is built as text, because the set of filters varies. Everything
+# else - the row cap and the include-delivered switch - goes in as a bind parameter:
+# `LIMIT $n` accepts NULL to mean "no limit", so the two callers need no separate SQL.
 _REQUEUE_TEMPLATE = """
 WITH target AS (
     SELECT id, status, lease_expires_at
     FROM deliveries
     WHERE {where}
     ORDER BY created_at
-    LIMIT {limit_clause}
+    LIMIT {limit_param}
     FOR UPDATE SKIP LOCKED
 ),
 classified AS (
     SELECT id,
            CASE
                WHEN status = 'in_flight' AND lease_expires_at > now() THEN 'skip_in_flight'
-               WHEN status = 'delivered' AND NOT {include_delivered} THEN 'skip_delivered'
+               WHEN status = 'delivered' AND NOT {include_delivered_param} THEN 'skip_delivered'
                ELSE 'requeue'
            END AS action
     FROM target
@@ -418,31 +416,54 @@ class RequeueOutcome:
     skipped_delivered: int
 
 
-async def requeue_request(
-    pool: asyncpg.Pool,
-    request_id: UUID,
-    recipients: list[str] | None,
-    include_delivered: bool,
-) -> RequeueOutcome:
-    """Requeue one lead: all of its recipients, or the named ones (by URL or label)."""
-    where = "request_id = $1"
-    params: list[Any] = [request_id]
-    if recipients:
-        params.append(recipients)
-        placeholder = f"${len(params)}"
-        where += f" AND (recipient_url = ANY({placeholder}) OR recipient_name = ANY({placeholder}))"
-
+def _build_requeue_sql(where: str, params: list[Any], include_delivered: bool, limit: int | None):
+    """Finish a requeue statement by appending its two trailing bind parameters."""
+    params = [*params, include_delivered, limit]
     sql = _REQUEUE_TEMPLATE.format(
         where=where,
-        limit_clause="ALL",
-        include_delivered="true" if include_delivered else "false",
+        include_delivered_param=f"${len(params) - 1}::boolean",
+        limit_param=f"${len(params)}",
     )
-    row = await pool.fetchrow(sql, *params)
+    return sql, params
+
+
+def _outcome(row: asyncpg.Record) -> RequeueOutcome:
     return RequeueOutcome(
         requeued_ids=list(row["requeued_ids"]),
         skipped_in_flight=row["skipped_in_flight"],
         skipped_delivered=row["skipped_delivered"],
     )
+
+
+async def requeue_request(
+    pool: asyncpg.Pool,
+    request_id: UUID,
+    recipients: list[str] | None,
+    include_delivered: bool,
+) -> RequeueOutcome | None:
+    """Requeue one lead: all of its recipients, or the named ones (by URL or label).
+
+    Returns None when there is no such lead. That check lives here rather than in the
+    API so both it and the requeue run on one connection, and so "unknown lead" cannot be
+    confused with "lead that happens to have no recipients".
+    """
+    where = "request_id = $1"
+    params: list[Any] = [request_id]
+    if recipients:
+        params.append(recipients)
+        ref = f"${len(params)}"
+        where += f" AND (recipient_url = ANY({ref}) OR recipient_name = ANY({ref}))"
+
+    # No row cap: a lead has at most `max_recipients_per_request` deliveries anyway.
+    sql, params = _build_requeue_sql(where, params, include_delivered, None)
+
+    async with pool.acquire() as conn:
+        known = await conn.fetchval(
+            "SELECT EXISTS (SELECT 1 FROM requests WHERE id = $1)", request_id
+        )
+        if not known:
+            return None
+        return _outcome(await conn.fetchrow(sql, *params))
 
 
 async def requeue_bulk(
@@ -456,7 +477,10 @@ async def requeue_bulk(
 ) -> RequeueOutcome:
     """Requeue everything matching a filter - the 'flush what piled up' button."""
     params: list[Any] = [statuses]
-    clauses = ["status::text = ANY($1)"]
+    # Cast the parameter to the enum, never the column: `status::text = ANY($1)` makes the
+    # status index unusable and forces a sequential scan (measured 9x slower, and it also
+    # wrecks the planner's row estimate).
+    clauses = ["status = ANY($1::delivery_status[])"]
 
     if recipient_origin:
         params.append(recipient_origin)
@@ -475,16 +499,9 @@ async def requeue_bulk(
             f"request_id IN (SELECT id FROM requests WHERE received_at <= ${len(params)})"
         )
 
-    params.append(limit)
-    sql = _REQUEUE_TEMPLATE.format(
-        where=" AND ".join(clauses),
-        limit_clause=f"${len(params)}",
-        # Bulk requeue is filter-driven; asking for 'delivered' explicitly is the opt-in.
-        include_delivered="true",
+    # Bulk requeue is filter-driven: naming 'delivered' in `statuses` is itself the opt-in,
+    # so nothing needs to be skipped for already having arrived.
+    sql, params = _build_requeue_sql(
+        " AND ".join(clauses), params, include_delivered=True, limit=limit
     )
-    row = await pool.fetchrow(sql, *params)
-    return RequeueOutcome(
-        requeued_ids=list(row["requeued_ids"]),
-        skipped_in_flight=row["skipped_in_flight"],
-        skipped_delivered=row["skipped_delivered"],
-    )
+    return _outcome(await pool.fetchrow(sql, *params))

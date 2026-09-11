@@ -434,6 +434,21 @@ async def test_requeue_resets_the_budget(pool: asyncpg.Pool, settings: Settings)
     assert await pool.fetchval("SELECT count(*) FROM delivery_attempts") == 1
 
 
+async def test_requeue_of_an_unknown_lead_is_distinguishable_from_a_no_op(
+    pool: asyncpg.Pool,
+) -> None:
+    """An unknown id must not look the same as a real lead with nothing to requeue -
+    one is a 404, the other is a legitimate "nothing to do"."""
+    from uuid import uuid4
+
+    assert await requeue_request(pool, uuid4(), None, include_delivered=False) is None
+
+    real = await make_request(pool)
+    outcome = await requeue_request(pool, real, None, include_delivered=False)
+    assert outcome is not None
+    assert outcome.requeued_ids == []
+
+
 async def test_requeue_leaves_delivered_leads_alone_by_default(
     pool: asyncpg.Pool, settings: Settings
 ) -> None:

@@ -7,8 +7,6 @@ accepting them into a schema that is not there.
 
 from __future__ import annotations
 
-import asyncio
-import contextlib
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -38,22 +36,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     if applied:
         logger.info("applied migrations: %s", ", ".join(applied))
 
-    worker_task: asyncio.Task | None = None
-    worker = None
-    if settings.run_worker_in_api:
-        from app.worker import Worker
-
-        worker = Worker(app.state.pool, settings)
-        worker_task = asyncio.create_task(worker.run(), name="in-process-worker")
-        logger.info("delivery worker running inside the API process")
-
     try:
         yield
     finally:
-        if worker is not None and worker_task is not None:
-            worker.request_stop()
-            with contextlib.suppress(asyncio.CancelledError):
-                await worker_task
         await app.state.pool.close()
 
 

@@ -90,15 +90,14 @@ class Worker:
         for claim in claimed:
             self._spawn(claim)
 
+        # Idle only when there was nothing at all to take. A *short* batch is not a reason
+        # to sleep: `max_claims_per_origin` deliberately hands back fewer rows than asked
+        # for when the due work belongs to few recipients, and sleeping on that would turn
+        # a fairness rule into a throughput limit - a burst for one recipient would trickle
+        # out at (cap / poll interval) per second. Going straight round again is safe
+        # because the in-flight ceiling above is what ends the loop.
         if not claimed:
-            # Nothing due. Sleep, but wake early if we are asked to stop.
             await self._sleep_unless_stopped(self.settings.worker_poll_interval_seconds)
-
-        # A short batch is *not* a reason to sleep: `max_claims_per_origin` deliberately
-        # returns fewer rows than asked for when the due work belongs to few recipients.
-        # Sleeping on that would turn a fairness rule into a throughput limit - a burst
-        # for one recipient would trickle out at (cap / poll interval) per second. So we
-        # go straight round again, and the in-flight ceiling is what stops the loop.
 
     def _spawn(self, claim: ClaimedDelivery) -> None:
         task = asyncio.create_task(

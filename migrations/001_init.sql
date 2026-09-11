@@ -80,23 +80,31 @@ CREATE TABLE deliveries (
     CONSTRAINT deliveries_request_recipient_unique UNIQUE (request_id, recipient_url)
 );
 
--- The claim index. Partial, so delivered/failed rows (the vast majority over time)
+-- `deliveries` is the most write-heavy table in the service: every claim and every
+-- recorded outcome updates a row, and each index has to be maintained on every one of
+-- those writes. So it carries only indexes that a query demonstrably uses.
+--
+-- The claim index. Partial, so delivered/failed rows - the vast majority over time -
 -- never appear in it and the queue index stays proportional to outstanding work.
 CREATE INDEX deliveries_claimable_idx
     ON deliveries (claimable_at)
     WHERE status IN ('pending', 'in_flight');
 
--- Supports the per-origin fairness window inside the claim query.
-CREATE INDEX deliveries_origin_claimable_idx
-    ON deliveries (recipient_origin, claimable_at)
-    WHERE status IN ('pending', 'in_flight');
-
-CREATE INDEX deliveries_request_idx ON deliveries (request_id);
+-- Counting and requeueing by state: /v1/problems and bulk retry.
 CREATE INDEX deliveries_status_created_idx ON deliveries (status, created_at DESC);
--- Drives "stuck for longer than N minutes" in /v1/problems.
-CREATE INDEX deliveries_unresolved_created_idx
-    ON deliveries (created_at)
-    WHERE status IN ('pending', 'in_flight');
+
+-- Note on three indexes that are deliberately absent:
+--   (request_id)                        - the UNIQUE (request_id, recipient_url) index
+--                                         above already answers a request_id lookup from
+--                                         its leading column; verified with EXPLAIN.
+--   (recipient_origin, claimable_at)    - nothing reads it. The claim query walks
+--                                         claimable_at globally and partitions by origin
+--                                         with a window function, and bulk retry filters
+--                                         on 'failed', outside the partial predicate.
+--   (created_at) WHERE unresolved       - the "stalled longer than N minutes" query runs
+--                                         at the same speed without it, because
+--                                         deliveries_claimable_idx already narrows to
+--                                         unresolved rows.
 
 
 -- claimable_at is maintained by the database so it cannot drift out of sync with

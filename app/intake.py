@@ -7,10 +7,17 @@ network I/O, so the response time does not depend on whether any recipient is al
 
 from __future__ import annotations
 
+from uuid import UUID
+
 import asyncpg
 
 from app.recipients import origin_of
-from app.schemas import IntakeAccepted, IntakeRequest, RecipientIn
+from app.schemas import (
+    AttachRecipientsResponse,
+    IntakeAccepted,
+    IntakeRequest,
+    RecipientIn,
+)
 
 _INSERT_REQUEST = """
     INSERT INTO requests (source_id, idempotency_key, payload)
@@ -104,23 +111,30 @@ async def accept_request(pool: asyncpg.Pool, payload: IntakeRequest) -> IntakeAc
 
 
 async def attach_recipients(
-    pool: asyncpg.Pool, request_id, recipients: list[RecipientIn]
-) -> tuple[int, int, list] | None:
+    pool: asyncpg.Pool, request_id: UUID, recipients: list[RecipientIn]
+) -> AttachRecipientsResponse | None:
     """Add recipients to a lead that was accepted without any (or with fewer).
 
-    This closes the loop on the "the address was never configured" case: without it,
-    such a lead would sit in /v1/problems forever with no way to resolve it, because
-    a manual retry has nothing to retry.
+    This closes the loop on the "the address was never configured" case: without it, such
+    a lead would sit in /v1/problems forever with no way out, because a manual retry has
+    nothing to retry.
 
-    Returns (added, already_present, new_delivery_ids), or None if the request is unknown.
+    Returns None if there is no such lead.
     """
     unique = _dedupe(recipients)
 
     async with pool.acquire() as conn, conn.transaction():
-        exists = await conn.fetchval("SELECT 1 FROM requests WHERE id = $1", request_id)
-        if exists is None:
+        known = await conn.fetchval(
+            "SELECT EXISTS (SELECT 1 FROM requests WHERE id = $1)", request_id
+        )
+        if not known:
             return None
 
         new_ids = await _insert_deliveries(conn, request_id, unique)
 
-    return len(new_ids), len(unique) - len(new_ids), new_ids
+    return AttachRecipientsResponse(
+        request_id=request_id,
+        added=len(new_ids),
+        already_present=len(unique) - len(new_ids),
+        delivery_ids=new_ids,
+    )

@@ -114,12 +114,6 @@ class Settings(BaseSettings):
     # --- misc ----------------------------------------------------------------
     user_agent: str = Field(default="intake/1.0")
     log_level: str = Field(default="INFO")
-    run_worker_in_api: bool = Field(
-        default=False,
-        description="Run a delivery worker inside the API process. Off in the compose "
-        "setup, which runs workers as their own scalable services; handy when running "
-        "the service as a single local process without Docker.",
-    )
 
     @field_validator("log_level")
     @classmethod
@@ -167,12 +161,6 @@ class Settings(BaseSettings):
             raise ConfigurationError(
                 "Invalid configuration:\n" + "\n".join(f"  - {e}" for e in errors)
             )
-
-    def retry_window_seconds(self) -> float:
-        """Total time span covered by the retry schedule - reported by /healthz."""
-        from app.retry import total_retry_window
-
-        return total_retry_window(self)
 
 
 @lru_cache

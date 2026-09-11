@@ -41,7 +41,6 @@ os.environ.update(
         "INTAKE_WORKER_POLL_INTERVAL_SECONDS": "0.05",
         "INTAKE_WORKER_SHUTDOWN_GRACE_SECONDS": "5",
         "INTAKE_LOG_LEVEL": "WARNING",
-        "INTAKE_RUN_WORKER_IN_API": "false",
     }
 )
 
@@ -252,13 +251,6 @@ async def wait_for(
 async def delivery_rows(pool: asyncpg.Pool, request_id: UUID | str) -> list[asyncpg.Record]:
     return await pool.fetch(
         "SELECT * FROM deliveries WHERE request_id = $1 ORDER BY recipient_url",
-        UUID(str(request_id)),
-    )
-
-
-async def attempt_rows(pool: asyncpg.Pool, request_id: UUID | str) -> list[asyncpg.Record]:
-    return await pool.fetch(
-        "SELECT * FROM delivery_attempts WHERE request_id = $1 ORDER BY attempt_number",
         UUID(str(request_id)),
     )
 

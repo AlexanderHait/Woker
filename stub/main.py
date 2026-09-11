@@ -46,7 +46,6 @@ class Behaviour(BaseModel):
         description="Apply `mode` to the first N requests only, then answer 200. "
         "Omit to apply it to every request.",
     )
-    response_body: dict[str, Any] | None = None
 
 
 class ReceivedRecord(BaseModel):
@@ -133,7 +132,7 @@ async def receive(
     if mode == "slow":
         await asyncio.sleep(behaviour.delay_seconds)
         record(200)
-        return behaviour.response_body or {"ok": True, "slow": True}
+        return {"ok": True, "slow": True}
 
     if mode == "error":
         record(behaviour.status_code)
@@ -143,7 +142,7 @@ async def receive(
         )
 
     record(200)
-    return behaviour.response_body or {"ok": True}
+    return {"ok": True}
 
 
 # ---------------------------------------------------------------------------

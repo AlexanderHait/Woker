@@ -80,10 +80,3 @@ async def apply_migrations(pool: asyncpg.Pool) -> list[str]:
             await conn.execute("SELECT pg_advisory_unlock($1)", MIGRATION_LOCK_KEY)
 
     return applied
-
-
-async def reset_schema(pool: asyncpg.Pool) -> None:
-    """Drop everything and re-migrate. Used by the test suite, never in production paths."""
-    async with pool.acquire() as conn:
-        await conn.execute("DROP SCHEMA public CASCADE; CREATE SCHEMA public;")
-    await apply_migrations(pool)

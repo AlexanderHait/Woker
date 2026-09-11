@@ -167,12 +167,10 @@ async def retry_request(
     """
     body = body or RetryRequest()
 
-    async with pool.acquire() as conn:
-        exists = await conn.fetchval("SELECT 1 FROM requests WHERE id = $1", request_id)
-    if exists is None:
+    outcome = await requeue_request(pool, request_id, body.recipients, body.include_delivered)
+    if outcome is None:
         raise HTTPException(status_code=404, detail=f"no request with id {request_id}")
 
-    outcome = await requeue_request(pool, request_id, body.recipients, body.include_delivered)
     return RetryResponse(
         requeued=len(outcome.requeued_ids),
         skipped_in_flight=outcome.skipped_in_flight,
@@ -231,14 +229,7 @@ async def add_recipients(
     result = await attach_recipients(pool, request_id, body.recipients)
     if result is None:
         raise HTTPException(status_code=404, detail=f"no request with id {request_id}")
-
-    added, already_present, delivery_ids = result
-    return AttachRecipientsResponse(
-        request_id=request_id,
-        added=added,
-        already_present=already_present,
-        delivery_ids=delivery_ids,
-    )
+    return result
 
 
 # ---------------------------------------------------------------------------
