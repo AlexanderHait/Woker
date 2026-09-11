@@ -1,0 +1,26 @@
+# Dependencies live in requirements.txt / requirements-dev.txt so there is exactly one
+# place to look and the Docker build can cache them. This file is tool configuration.
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+testpaths = ["tests"]
+markers = [
+    "scenario: end-to-end checks matching section 4 of the brief",
+    "slow: takes more than a few seconds (real backoff waits, lease expiry)",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "ASYNC"]
+
+[tool.ruff.lint.per-file-ignores]
+# B008: pytest fixtures shadow their own names by design.
+# ASYNC109: `wait_for(..., timeout=)` is a test helper, not a cancellable async API.
+"tests/*" = ["B008", "ASYNC109"]
+# FastAPI's Depends()/Query() defaults are function calls on purpose.
+"app/api.py" = ["B008"]
+"stub/main.py" = ["B008"]

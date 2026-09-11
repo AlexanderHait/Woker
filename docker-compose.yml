@@ -1,0 +1,96 @@
+# `docker compose up` brings up the database, the API, two delivery workers and the
+# recipient stub. Nothing else is needed on the host besides Docker.
+
+name: intake
+
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: intake
+      POSTGRES_PASSWORD: intake
+      POSTGRES_DB: intake
+    ports:
+      # Deliberately not 5432 on the host: a developer machine very often already has a
+      # Postgres there, and a port clash is the classic "it did not start" on a fresh box.
+      - "${DB_PORT:-55432}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./docker/initdb:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U intake -d intake"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  api:
+    build:
+      context: .
+      target: base
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000
+    environment:
+      INTAKE_DATABASE_URL: postgresql://intake:intake@db:5432/intake
+      INTAKE_LOG_LEVEL: INFO
+    ports:
+      - "${API_PORT:-8000}:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/readyz')"
+      interval: 3s
+      timeout: 3s
+      retries: 20
+      start_period: 5s
+    restart: unless-stopped
+
+  worker:
+    build:
+      context: .
+      target: base
+    command: python -m app.run_worker
+    environment:
+      INTAKE_DATABASE_URL: postgresql://intake:intake@db:5432/intake
+      INTAKE_LOG_LEVEL: INFO
+    depends_on:
+      db:
+        condition: service_healthy
+    # Two of them, to show that the queue coordinates through the database alone:
+    # SKIP LOCKED keeps them off each other's rows, leases clean up after a crash.
+    deploy:
+      replicas: 2
+    restart: unless-stopped
+
+  stub:
+    build:
+      context: .
+      target: base
+    command: uvicorn stub.main:app --host 0.0.0.0 --port 9000
+    ports:
+      - "${STUB_PORT:-9000}:9000"
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - python -c "import urllib.request; urllib.request.urlopen('http://localhost:9000/healthz')"
+      interval: 3s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+  # Not started by `docker compose up` - it is behind a profile. `make test` runs it.
+  tests:
+    build:
+      context: .
+      target: dev
+    profiles: ["test"]
+    command: pytest -v
+    environment:
+      INTAKE_DATABASE_URL: postgresql://intake:intake@db:5432/intake_test
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  pgdata:

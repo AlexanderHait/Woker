@@ -1,0 +1,11 @@
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+.env
+*.egg-info/
+
+# Local compose tweaks (different ports, a proxy CA, a mounted source tree).
+docker-compose.override.yml
