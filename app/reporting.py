@@ -62,7 +62,11 @@ def _request_state(statuses: list[str]) -> RequestState:
 async def get_request_status(
     pool: asyncpg.Pool, request_id: UUID, settings: Settings
 ) -> RequestStatus | None:
-    async with pool.acquire() as conn:
+    # Repeatable read across the three statements: a worker may well be recording an
+    # attempt while we read. Without one snapshot the journal could show an attempt that
+    # the delivery row does not reflect yet, which is exactly the sort of self-contradiction
+    # that wastes someone's time when they are chasing a lead that went missing.
+    async with pool.acquire() as conn, conn.transaction(isolation="repeatable_read"):
         request = await conn.fetchrow(_SELECT_REQUEST, request_id)
         if request is None:
             return None
@@ -223,7 +227,10 @@ async def get_problems(
 ) -> ProblemsResponse:
     stale = timedelta(minutes=stale_minutes)
 
-    async with pool.acquire() as conn:
+    # One transaction for both statements so they share a single `now()`. Otherwise the
+    # staleness cutoff moves between them, and a delivery crossing the threshold in that
+    # gap would be counted but missing from the list - a report contradicting itself.
+    async with pool.acquire() as conn, conn.transaction():
         summary = await conn.fetchrow(_PROBLEMS_COUNTS, stale)
         page_rows = await conn.fetch(_PROBLEMS_PAGE, stale, reason, limit, offset)
 

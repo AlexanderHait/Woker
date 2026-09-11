@@ -416,7 +416,9 @@ class RequeueOutcome:
     skipped_delivered: int
 
 
-def _build_requeue_sql(where: str, params: list[Any], include_delivered: bool, limit: int | None):
+def _build_requeue_sql(
+    where: str, params: list[Any], include_delivered: bool, limit: int | None
+) -> tuple[str, list[Any]]:
     """Finish a requeue statement by appending its two trailing bind parameters."""
     params = [*params, include_delivered, limit]
     sql = _REQUEUE_TEMPLATE.format(
