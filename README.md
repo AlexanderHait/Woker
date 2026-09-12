@@ -32,6 +32,25 @@ docker compose up
 `make up` делает то же самое с `--wait` — команда вернётся только когда всё
 поднялось и здорово. `make down` останавливает всё и удаляет том с базой.
 
+Готово, когда в логах появились три вещи: `database system is ready to accept connections`,
+`Uvicorn running on http://0.0.0.0:8000` и **две** строки `worker ... starting`.
+
+Одна оговорка про повторный запуск: `docker compose up` не пересобирает образ, который уже
+существует. После `git pull` или правки кода нужен `docker compose up --build` (или `make up`,
+он всегда с `--build`) — иначе поднимется прошлая сборка.
+
+### Если в системе нет `make`
+
+Он нужен только для сокращений. Полные эквиваленты:
+
+| вместо | выполнить |
+|---|---|
+| `make up` | `docker compose up -d --build --wait` |
+| `make down` | `docker compose down -v` |
+| `make test` | `docker compose up -d --wait db` затем<br>`docker compose run --rm --build tests pytest -v` |
+| `make demo` | `bash scripts/demo.sh` |
+| `make logs` | `docker compose logs -f` |
+
 ### Без Docker
 
 Нужен доступный PostgreSQL 14+. Схема накатывается сама при старте.

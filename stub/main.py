@@ -181,24 +181,32 @@ async def get_received(name: str, limit: int = 200) -> dict:
 
 @app.get(
     "/received/{name}/summary",
-    summary="Counts, including how many distinct deliveries arrived",
+    summary="Counts, including whether any lead was delivered more than once",
 )
 async def get_summary(name: str) -> dict:
-    """`total` vs `unique_idempotency_keys` is the duplicate check.
+    """`duplicate_deliveries` is the number that answers "did a lead arrive twice?".
 
-    They are equal when every lead arrived exactly once. `total` larger than
-    `unique_idempotency_keys` means at least one lead was delivered more than once -
-    which the recipient could have discarded, since the key is what identifies it.
+    It counts repeats among the requests this endpoint *accepted*, and only those. A
+    repeat that was answered with an error is not a duplicate delivery - the lead did
+    not get through, so trying again is the whole point. Counting those as duplicates
+    would make a healthy retry look like the bug the service exists to prevent.
+
+    `repeats_total` keeps the raw figure, errors included, for when you want to see how
+    much retrying happened at all.
     """
     state = _state(name)
-    keys = [r.idempotency_key for r in state.received if r.idempotency_key]
-    request_ids = {r.request_id for r in state.received if r.request_id}
+    accepted = [r for r in state.received if r.responded_with == 200 and r.idempotency_key]
+    accepted_keys = [r.idempotency_key for r in accepted]
+    all_keys = [r.idempotency_key for r in state.received if r.idempotency_key]
     return {
         "name": name,
         "total": len(state.received),
-        "unique_idempotency_keys": len(set(keys)),
-        "unique_request_ids": len(request_ids),
-        "duplicates": len(keys) - len(set(keys)),
+        "accepted": len(accepted),
+        "unique_idempotency_keys": len(set(all_keys)),
+        "unique_request_ids": len({r.request_id for r in state.received if r.request_id}),
+        # The one to look at: how many leads this endpoint took in more than once.
+        "duplicate_deliveries": len(accepted_keys) - len(set(accepted_keys)),
+        "repeats_total": len(all_keys) - len(set(all_keys)),
         "by_status": _count_by_status(state),
     }
 

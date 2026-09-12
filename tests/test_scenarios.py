@@ -112,7 +112,7 @@ async def test_scenario_02_a_repeat_delivers_one_copy(
     assert await pool.fetchval("SELECT count(*) FROM requests") == 1
     summary = await stub.summary(name)
     assert summary["total"] == 1
-    assert summary["duplicates"] == 0
+    assert summary["duplicate_deliveries"] == 0
 
 
 # ---------------------------------------------------------------------------
@@ -464,7 +464,7 @@ async def test_scenario_09_five_hundred_leads_at_once(
     summary = await stub.summary(name)
     assert summary["total"] == count
     assert summary["unique_idempotency_keys"] == count
-    assert summary["duplicates"] == 0
+    assert summary["duplicate_deliveries"] == 0
 
     stats = (await api.get("/v1/stats")).json()
     assert stats["requests_accepted"] == count

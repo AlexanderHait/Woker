@@ -81,7 +81,7 @@ ok "second response: duplicate=true, same id $ID2"
 wait_for_state "$ID2" delivered 30 || fail "not delivered"
 info "what the recipient actually got:"
 curl -sS "$STUB/received/$RUN-ok/summary" | pretty | sed 's/^/    /'
-ok "one copy per lead - 'duplicates' above is 0"
+ok "one copy per lead - 'duplicate_deliveries' above is 0"
 
 
 # ---------------------------------------------------------------------------
@@ -220,7 +220,7 @@ for _ in $(seq 1 120); do
     sleep 1
 done
 curl -sS "$STUB/received/$RUN-bulk/summary" | pretty | sed 's/^/    /'
-[ "$(curl -sS "$STUB/received/$RUN-bulk/summary" | get 'd["duplicates"]')" = "0" ] \
+[ "$(curl -sS "$STUB/received/$RUN-bulk/summary" | get 'd["duplicate_deliveries"]')" = "0" ] \
     || fail "the recipient got duplicates"
 ok "all 500 arrived, none of them twice"
 
