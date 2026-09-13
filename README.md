@@ -130,16 +130,32 @@ make demo        # scripts/demo.sh
 доказательство. Занимает несколько минут — в основном ожидание настоящих таймаутов и
 настоящих пауз между повторами.
 
-Заглушка управляемая, так что любой сценарий можно воспроизвести самому:
+Заглушка управляемая, так что любой сценарий можно воспроизвести самому. Задание просило
+четыре поведения — вот они, по одной команде на каждое:
 
 ```bash
+# «работай нормально» — так же ведёт себя ненастроенная заглушка
 curl -X PUT localhost:9000/control/crm -H 'Content-Type: application/json' -d '{"mode": "ok"}'
-curl -X PUT localhost:9000/control/crm -d '{"mode": "error", "status_code": 500}'
-curl -X PUT localhost:9000/control/crm -d '{"mode": "error", "fail_first": 3}'   # 3 раза упадёт, потом ок
-curl -X PUT localhost:9000/control/crm -d '{"mode": "silent"}'                   # примет соединение и замолчит
-curl -X PUT localhost:9000/control/crm -d '{"mode": "slow", "delay_seconds": 30}'
 
-curl localhost:9000/received/crm/summary   # сколько пришло и не пришло ли что-то дважды
+# «отвечай ошибкой» — любой код, не только 500
+curl -X PUT localhost:9000/control/crm -H 'Content-Type: application/json' -d '{"mode": "error", "status_code": 500}'
+
+# «молчи» — примет соединение и не ответит никогда
+curl -X PUT localhost:9000/control/crm -H 'Content-Type: application/json' -d '{"mode": "silent"}'
+
+# «отвечай через N секунд»
+curl -X PUT localhost:9000/control/crm -H 'Content-Type: application/json' -d '{"mode": "slow", "delay_seconds": 30}'
+
+# сверх задания: упасть 3 раза и дальше работать — это сценарий 3 одной командой
+curl -X PUT localhost:9000/control/crm -H 'Content-Type: application/json' -d '{"mode": "error", "fail_first": 3}'
+```
+
+Что заглушка получила — и не получила ли что-то дважды:
+
+```bash
+curl localhost:9000/received/crm/summary   # счётчики, главный из них — duplicate_deliveries
+curl localhost:9000/received/crm           # каждое тело целиком, с заголовками доставки
+curl localhost:9000/control/crm            # чем настроена сейчас и сколько уже приняла
 ```
 
 Пятый сценарий («лежит дольше лимита попыток») доходит до `failed` через полные сутки

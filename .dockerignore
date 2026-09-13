@@ -8,7 +8,10 @@ __pycache__
 .pytest_cache
 .ruff_cache
 .env
-README.md
+# README.md is deliberately NOT excluded: the suite checks that the commands in it still
+# work, so the image needs it. It is copied in the last layer, so editing it rebuilds
+# nothing but that layer.
 NOTES.md
+NOTES-details.md
 scripts
 docker/initdb

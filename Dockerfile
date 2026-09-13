@@ -29,5 +29,7 @@ RUN pip install --no-cache-dir -r requirements-dev.txt
 
 COPY pyproject.toml ./
 COPY tests ./tests
+# The suite checks that the commands in the README still work, so it needs the README.
+COPY README.md ./
 
 CMD ["pytest", "-v"]
